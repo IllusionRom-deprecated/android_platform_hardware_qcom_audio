@@ -1,4 +1,7 @@
 /*
+ * Copyright (c) 2013, The Linux Foundation. All rights reserved.
+ * Not a Contribution.
+ *
  * Copyright (C) 2013 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,7 +18,7 @@
  */
 
 #define LOG_TAG "audio_hw_primary"
-/*#define LOG_NDEBUG 0*/
+#define LOG_NDEBUG 0
 /*#define VERY_VERY_VERBOSE_LOGGING*/
 #ifdef VERY_VERY_VERBOSE_LOGGING
 #define ALOGVV ALOGV
@@ -46,6 +49,7 @@
 #include "audio_hw.h"
 #include "platform_api.h"
 #include <platform.h>
+#include "audio_extn.h"
 
 #include "sound/compress_params.h"
 
@@ -226,6 +230,15 @@ static int enable_snd_device(struct audio_device *adev,
         return 0;
     }
 
+    /* start usb playback thread */
+    if(SND_DEVICE_OUT_USB_HEADSET == snd_device ||
+       SND_DEVICE_OUT_SPEAKER_AND_USB_HEADSET == snd_device)
+        audio_extn_usb_start_playback(adev);
+
+    /* start usb capture thread */
+    if(SND_DEVICE_IN_USB_HEADSET_MIC == snd_device)
+       audio_extn_usb_start_capture(adev);
+
     if (platform_send_audio_calibration(adev->platform, snd_device) < 0) {
         adev->snd_dev_ref_cnt[snd_device]--;
         return -EINVAL;
@@ -255,8 +268,18 @@ static int disable_snd_device(struct audio_device *adev,
     }
     adev->snd_dev_ref_cnt[snd_device]--;
     if (adev->snd_dev_ref_cnt[snd_device] == 0) {
-        ALOGV("%s: snd_device(%d: %s)", __func__,
-              snd_device, platform_get_snd_device_name(snd_device));
+        ALOGV("%s: snd_device(%d: %s) refcnt=%d", __func__,
+              snd_device, platform_get_snd_device_name(snd_device), adev->snd_dev_ref_cnt[snd_device]);
+
+        /* exit usb play back thread */
+        if(SND_DEVICE_OUT_USB_HEADSET == snd_device ||
+           SND_DEVICE_OUT_SPEAKER_AND_USB_HEADSET == snd_device)
+            audio_extn_usb_stop_playback();
+
+        /* exit usb capture thread */
+        if(SND_DEVICE_IN_USB_HEADSET_MIC == snd_device)
+            audio_extn_usb_stop_capture(adev);
+
         audio_route_reset_path(adev->audio_route, platform_get_snd_device_name(snd_device));
         if (update_mixer)
             audio_route_update_mixer(adev->audio_route);
@@ -831,7 +854,7 @@ static int check_and_set_hdmi_channels(struct audio_device *adev,
         return 0;
 
     if (channels == adev->cur_hdmi_channels) {
-        ALOGD("%s: Requested channels are same as current", __func__);
+        ALOGD("%s: Requested channels are same as current channels(%d)", __func__, channels);
         return 0;
     }
 
@@ -927,8 +950,12 @@ int start_output_stream(struct stream_out *out)
     uc_info->out_snd_device = SND_DEVICE_NONE;
 
     /* This must be called before adding this usecase to the list */
-    if (out->devices & AUDIO_DEVICE_OUT_AUX_DIGITAL)
-        check_and_set_hdmi_channels(adev, out->config.channels);
+    if (out->devices & AUDIO_DEVICE_OUT_AUX_DIGITAL) {
+        if (out->usecase == USECASE_AUDIO_PLAYBACK_OFFLOAD)
+            check_and_set_hdmi_channels(adev, out->compr_config.codec->ch_in);
+        else
+            check_and_set_hdmi_channels(adev, out->config.channels);
+    }
 
     list_add_tail(&adev->usecase_list, &uc_info->list);
 
@@ -1089,9 +1116,18 @@ static int check_input_parameters(uint32_t sample_rate,
                                   audio_format_t format,
                                   int channel_count)
 {
-    if (format != AUDIO_FORMAT_PCM_16_BIT) return -EINVAL;
+    int ret = 0;
 
-    if ((channel_count < 1) || (channel_count > 2)) return -EINVAL;
+    if (format != AUDIO_FORMAT_PCM_16_BIT) ret = -EINVAL;
+
+    switch (channel_count) {
+    case 1:
+    case 2:
+    case 6:
+        break;
+    default:
+        ret = -EINVAL;
+    }
 
     switch (sample_rate) {
     case 8000:
@@ -1105,10 +1141,10 @@ static int check_input_parameters(uint32_t sample_rate,
     case 48000:
         break;
     default:
-        return -EINVAL;
+        ret = -EINVAL;
     }
 
-    return 0;
+    return ret;
 }
 
 static size_t get_input_buffer_size(uint32_t sample_rate,
@@ -1862,8 +1898,7 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
     out->handle = handle;
 
     /* Init use case and pcm_config */
-    if (out->flags & AUDIO_OUTPUT_FLAG_DIRECT &&
-            !(out->flags & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD) &&
+    if (out->flags == AUDIO_OUTPUT_FLAG_DIRECT &&
         out->devices & AUDIO_DEVICE_OUT_AUX_DIGITAL) {
         pthread_mutex_lock(&adev->lock);
         ret = read_hdmi_channel_masks(out);
@@ -2114,6 +2149,7 @@ static int adev_set_parameters(struct audio_hw_device *dev, const char *kvpairs)
         pthread_mutex_unlock(&adev->lock);
     }
 
+    audio_extn_set_parameters(adev, parms);
     str_parms_destroy(parms);
     ALOGV("%s: exit with code(%d)", __func__, ret);
     return ret;
@@ -2122,7 +2158,7 @@ static int adev_set_parameters(struct audio_hw_device *dev, const char *kvpairs)
 static char* adev_get_parameters(const struct audio_hw_device *dev,
                                  const char *keys)
 {
-    return strdup("");
+    return audio_extn_get_parameters(dev, keys);
 }
 
 static int adev_init_check(const struct audio_hw_device *dev)
@@ -2237,7 +2273,7 @@ static int adev_open_input_stream(struct audio_hw_device *dev,
 {
     struct audio_device *adev = (struct audio_device *)dev;
     struct stream_in *in;
-    int ret, buffer_size, frame_size;
+    int ret = 0, buffer_size, frame_size;
     int channel_count = popcount(config->channel_mask);
 
     ALOGV("%s: enter", __func__);
@@ -2283,7 +2319,7 @@ static int adev_open_input_stream(struct audio_hw_device *dev,
 
     *stream_in = &in->stream;
     ALOGV("%s: exit", __func__);
-    return 0;
+    return ret;
 
 err_open:
     free(in);
