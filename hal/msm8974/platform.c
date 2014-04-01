@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2013, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2014, The Linux Foundation. All rights reserved.
  * Not a Contribution.
  *
- * Copyright (C) 2013 The Android Open Source Project
+ * Copyright (C) 2013-2014 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -173,7 +173,7 @@ static const int acdb_device_table[SND_DEVICE_MAX] = {
     [SND_DEVICE_OUT_VOICE_TTY_VCO_HEADPHONES] = 17,
     [SND_DEVICE_OUT_VOICE_TTY_HCO_HANDSET] = 37,
     [SND_DEVICE_OUT_AFE_PROXY] = 0,
-    [SND_DEVICE_OUT_USB_HEADSET] = 0,
+    [SND_DEVICE_OUT_USB_HEADSET] = 45,
     [SND_DEVICE_OUT_SPEAKER_AND_USB_HEADSET] = 14,
     [SND_DEVICE_OUT_ANC_HEADSET] = 26,
     [SND_DEVICE_OUT_ANC_FB_HEADSET] = 26,
@@ -219,6 +219,7 @@ static bool is_tmus = false;
 
 static void check_operator()
 {
+#ifndef DISABLE_TMUS_AUDIO
     char value[PROPERTY_VALUE_MAX];
     int mccmnc;
     property_get("gsm.sim.operator.numeric",value,"0");
@@ -245,6 +246,7 @@ static void check_operator()
         is_tmus = true;
         break;
     }
+#endif
 }
 
 bool is_operator_tmus()
@@ -401,6 +403,7 @@ void platform_add_backend_name(char *mixer_path, snd_device_t snd_device)
         strcat(mixer_path, " speaker-and-hdmi");
     else if (snd_device == SND_DEVICE_OUT_AFE_PROXY)
         strlcat(mixer_path, " afe-proxy", MIXER_PATH_MAX_LENGTH);
+#ifdef USB_HEADSET_ENABLED
     else if (snd_device == SND_DEVICE_OUT_USB_HEADSET)
         strlcat(mixer_path, " usb-headphones", MIXER_PATH_MAX_LENGTH);
     else if (snd_device == SND_DEVICE_OUT_SPEAKER_AND_USB_HEADSET)
@@ -408,6 +411,7 @@ void platform_add_backend_name(char *mixer_path, snd_device_t snd_device)
                 MIXER_PATH_MAX_LENGTH);
     else if (snd_device == SND_DEVICE_IN_USB_HEADSET_MIC)
         strlcat(mixer_path, " usb-headset-mic", MIXER_PATH_MAX_LENGTH);
+#endif
 }
 
 int platform_get_pcm_device_id(audio_usecase_t usecase, int device_type)
@@ -587,9 +591,11 @@ snd_device_t platform_get_output_snd_device(void *platform, audio_devices_t devi
             snd_device = SND_DEVICE_OUT_BT_SCO;
         } else if (devices & AUDIO_DEVICE_OUT_SPEAKER) {
             snd_device = SND_DEVICE_OUT_VOICE_SPEAKER;
+#ifdef USB_HEADSET_ENABLED
         } else if (devices & AUDIO_DEVICE_OUT_ANLG_DOCK_HEADSET ||
                    devices & AUDIO_DEVICE_OUT_DGTL_DOCK_HEADSET) {
             snd_device = SND_DEVICE_OUT_USB_HEADSET;
+#endif
         } else if (devices & AUDIO_DEVICE_OUT_EARPIECE) {
             if (is_operator_tmus())
                 snd_device = SND_DEVICE_OUT_VOICE_HANDSET_TMUS;
@@ -653,9 +659,11 @@ snd_device_t platform_get_output_snd_device(void *platform, audio_devices_t devi
         snd_device = SND_DEVICE_OUT_BT_SCO;
     } else if (devices & AUDIO_DEVICE_OUT_AUX_DIGITAL) {
         snd_device = SND_DEVICE_OUT_HDMI ;
+#ifdef USB_HEADSET_ENABLED
     } else if (devices & AUDIO_DEVICE_OUT_ANLG_DOCK_HEADSET ||
                devices & AUDIO_DEVICE_OUT_DGTL_DOCK_HEADSET) {
         snd_device = SND_DEVICE_OUT_USB_HEADSET;
+#endif
     } else if (devices & AUDIO_DEVICE_OUT_EARPIECE) {
         snd_device = SND_DEVICE_OUT_HANDSET;
     } else if (devices & AUDIO_DEVICE_OUT_PROXY) {
@@ -806,9 +814,11 @@ snd_device_t platform_get_input_snd_device(void *platform, audio_devices_t out_d
             snd_device = SND_DEVICE_IN_BT_SCO_MIC ;
         } else if (in_device & AUDIO_DEVICE_IN_AUX_DIGITAL) {
             snd_device = SND_DEVICE_IN_HDMI_MIC;
+#ifdef USB_HEADSET_ENABLED
         } else if (in_device & AUDIO_DEVICE_IN_ANLG_DOCK_HEADSET ||
                    in_device & AUDIO_DEVICE_IN_DGTL_DOCK_HEADSET) {
             snd_device = SND_DEVICE_IN_USB_HEADSET_MIC;
+#endif
         } else {
             ALOGE("%s: Unknown input device(s) %#x", __func__, in_device);
             ALOGW("%s: Using default handset-mic", __func__);
@@ -827,9 +837,11 @@ snd_device_t platform_get_input_snd_device(void *platform, audio_devices_t out_d
             snd_device = SND_DEVICE_IN_BT_SCO_MIC;
         } else if (out_device & AUDIO_DEVICE_OUT_AUX_DIGITAL) {
             snd_device = SND_DEVICE_IN_HDMI_MIC;
+#ifdef USB_HEADSET_ENABLED
         } else if (out_device & AUDIO_DEVICE_OUT_ANLG_DOCK_HEADSET ||
                    out_device & AUDIO_DEVICE_OUT_DGTL_DOCK_HEADSET) {
             snd_device = SND_DEVICE_IN_USB_HEADSET_MIC;
+#endif
         } else {
             ALOGE("%s: Unknown output device(s) %#x", __func__, out_device);
             ALOGW("%s: Using default handset-mic", __func__);
